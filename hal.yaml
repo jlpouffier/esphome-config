@@ -1,0 +1,192 @@
+substitutions:
+  name: hal
+  friendly_name: HAL
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  name_add_mac_suffix: false
+
+
+esp32:
+  board: wemos_d1_mini32
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret voice-assistant-encryption-key
+
+ota:
+  password: !secret voice-assistant-ota-password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+i2s_audio:
+  - id: i2s_out
+    i2s_lrclk_pin: 22
+    i2s_bclk_pin: 21
+  - id: i2s_in
+    i2s_lrclk_pin: 26
+    i2s_bclk_pin: 18
+
+speaker:
+  - platform: i2s_audio
+    id: external_speaker
+    dac_type: external
+    i2s_audio_id: i2s_out
+    i2s_dout_pin: 17
+    mode: mono
+
+
+microphone:
+  - platform: i2s_audio
+    id: external_microphone
+    adc_type: external
+    i2s_audio_id: i2s_in
+    i2s_din_pin: 19
+    pdm: false
+
+esp_adf:
+
+voice_assistant:
+  id: va
+  microphone: external_microphone
+  speaker: external_speaker
+  noise_suppression_level: 4
+  auto_gain: 31dBFS
+  volume_multiplier: 8.0
+  vad_threshold: 3
+  use_wake_word: true
+  on_listening:
+      - light.turn_on:
+          id: led
+          blue: 0%
+          red: 100%
+          green: 0%
+          brightness: 100%
+  on_tts_start:
+    - light.turn_on:
+        id: led
+        blue: 0%
+        red: 100%
+        green: 0%
+        brightness: 50%
+        transition_length: 250ms
+  on_end:
+    - delay: 100ms
+    - wait_until:
+        not:
+          speaker.is_playing:
+              id: external_speaker
+    - script.execute: reset_led
+  on_error:
+    - script.execute: reset_led
+  on_client_connected:
+    - if:
+        condition:
+          switch.is_on: use_wake_word
+        then:
+          - voice_assistant.start_continuous:
+          - script.execute: reset_led
+  on_client_disconnected:
+    - if:
+        condition:
+          switch.is_on: use_wake_word
+        then:
+          - voice_assistant.stop:
+          - light.turn_off: led  
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: led
+    name: Voice Assistant Led
+    disabled_by_default: true
+    entity_category: config
+    pin: 33
+    default_transition_length: 0s
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: grb
+    rmt_channel: 0
+    effects:
+      - pulse:
+          transition_length: 250ms
+          update_interval: 250ms
+      
+switch:
+  - platform: template
+    name: Use Wake Word
+    id: use_wake_word
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: id(va).set_use_wake_word(true);
+      - if:
+          condition:
+            not:
+              - voice_assistant.is_running
+          then:
+            - voice_assistant.start_continuous
+      - script.execute: reset_led
+    on_turn_off:
+      - voice_assistant.stop
+      - lambda: id(va).set_use_wake_word(false);
+      - script.execute: reset_led
+
+script:
+  - id: reset_led
+    then:
+      - if:
+          condition:
+            switch.is_on: use_wake_word
+          then:
+            - light.turn_on:
+                id: led
+                blue: 0%
+                red: 100%
+                green: 0%
+                brightness: 25%
+                transition_length: 250ms
+          else:
+            - light.turn_off: led
+
+button:
+  - platform: restart
+    name: "Restart"
+    disabled_by_default: true
+    entity_category: diagnostic
+
+#binary_sensor:
+#  - platform: status
+#    name: API Status
+#    id: api_status
+#    disabled_by_default: true
+#    entity_category: diagnostic
+#    on_press:
+#      - delay: 1s
+#      - if:
+#          condition:
+#            switch.is_on: use_wake_word
+#          then:
+#            - voice_assistant.start_continuous:
+#            - script.execute: reset_led
+#    on_release:
+#      - if:
+#          condition:
+#            switch.is_on: use_wake_word
+#          then:
+#            - light.turn_off: led
+#            - voice_assistant.stop:
+
+external_components:
+  - source: github://pr#5230
+    components:
+      - esp_adf
+    refresh: 0s   
