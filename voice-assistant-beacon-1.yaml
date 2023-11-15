@@ -15,7 +15,7 @@ esp32:
 # Enable logging
 logger:
 
-# Enable Home Assistant API
+# Enable Home Assistant API 
 api:
   encryption:
     key: !secret voice-assistant-encryption-key
