@@ -1,6 +1,30 @@
-esphome:
+substitutions:
   name: talkie
   friendly_name: Talkie
+
+  voice_assist_idle_phase_id: '1'
+  voice_assist_listening_phase_id: '2'
+  voice_assist_thinking_phase_id: '3'
+  voice_assist_replying_phase_id: '4'
+  voice_assist_not_ready_phase_id: '10'
+  voice_assist_error_phase_id: '11'  
+  voice_assist_muted_phase_id: '12'
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  name_add_mac_suffix: false
+  on_boot:
+      priority: 600
+      then: 
+        - script.execute: control_led
+        - delay: 30s
+        - if:
+            condition:
+              lambda: return id(init_in_progress);
+            then:
+              - lambda: id(init_in_progress) = false;
+              - script.execute: control_led
 
 esp32:
   board: featheresp32
@@ -15,6 +39,10 @@ logger:
 api:
   encryption:
     key: !secret talkie-api-encryption-key
+  on_client_connected:
+    - script.execute: control_led
+  on_client_disconnected:
+    - script.execute: control_led
 
 ota:
   password: !secret talkie_ota_password
@@ -22,6 +50,10 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  on_connect:
+    - script.execute: control_led
+  on_disconnect:
+    - script.execute: control_led
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
@@ -92,30 +124,12 @@ binary_sensor:
           then:
             - voice_assistant.start:
                 silence_detection: false
-#          else:
-#            - voice_assistant.stop:
-#            - lambda: id(va).set_use_wake_word(false);
-#            - wait_until:
-#                not:
-#                  voice_assistant.is_running:       
-#            - voice_assistant.start:
-#                silence_detection: false
     on_release:
       - if:
           condition:
             switch.is_off: use_wake_word
           then:
             - voice_assistant.stop:
-#          else:
-#            - voice_assistant.stop:
-#            - delay: 100ms
-#            - wait_until:
-#                not:
-#                  speaker.is_playing:
-#                      id: external_speaker
-#            - lambda: id(va).set_use_wake_word(true);
-#            - voice_assistant.start_continuous:
-#            - script.execute: reset_led
 
 
   - platform: gpio
@@ -132,13 +146,14 @@ binary_sensor:
             id: led
             blue: 100%
             red: 100%
-            green: 0%
-            brightness: 50%    
+            green: 100%
+            brightness: 50%
+            transition_length: 0s    
     on_release:
       then:
         - switch.toggle: use_wake_word 
         - delay: 1s
-        - script.execute: reset_led
+        - script.execute: control_led
   
 esp_adf:
 
@@ -152,43 +167,47 @@ voice_assistant:
   vad_threshold: 3
   use_wake_word: true
   on_listening:
-      - light.turn_on:
-          id: led
-          blue: 100%
-          red: 0%
-          green: 0%
-          brightness: 50%
-  on_tts_start:
-    - light.turn_on:
-        id: led
-        blue: 0%
-        red: 0%
-        green: 100%
-        brightness: 50%
-        transition_length: 250ms
-  on_end:
-    - delay: 100ms
-    - wait_until:
-        not:
-          speaker.is_playing:
-              id: external_speaker
-    - script.execute: reset_led
+    - lambda: id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+    - script.execute: control_led
+  on_stt_vad_end:
+    - lambda: id(voice_assistant_phase) = ${voice_assist_thinking_phase_id};
+    - script.execute: control_led
+  on_tts_stream_start:
+    - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+    - script.execute: control_led
+  on_tts_stream_end:
+    - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+    - script.execute: control_led
   on_error:
-    - script.execute: reset_led
+    - if:
+        condition:
+          lambda: return !id(init_in_progress);
+        then:
+          - lambda: id(voice_assistant_phase) = ${voice_assist_error_phase_id};  
+          - script.execute: control_led
+          - delay: 1s
+          - if:
+              condition:
+                switch.is_on: use_wake_word
+              then:
+                - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+              else:
+                - lambda: id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+          - script.execute: control_led
   on_client_connected:
+    - lambda: id(init_in_progress) = false; 
     - if:
         condition:
           switch.is_on: use_wake_word
         then:
-          - voice_assistant.start_continuous:
-          - script.execute: reset_led
+          - voice_assistant.start_continuous: 
+          - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+        else:
+          - lambda: id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+    - script.execute: control_led
   on_client_disconnected:
-    - if:
-        condition:
-          switch.is_on: use_wake_word
-        then:
-          - voice_assistant.stop:
-          - light.turn_off: led  
+    - lambda: id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};  
+    - script.execute: control_led
 
 light:
   - platform: esp32_rmt_led_strip
@@ -197,11 +216,24 @@ light:
     disabled_by_default: true
     entity_category: config
     pin: 16
-    default_transition_length: 0s
+    default_transition_length: 250ms
     chipset: WS2812
     num_leds: 1
     rgb_order: grb
     rmt_channel: 0
+    effects:
+      - pulse:
+          name: "Slow Pulse"
+          transition_length: 250ms
+          update_interval: 250ms
+          min_brightness: 50%
+          max_brightness: 100%
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 100ms
+          update_interval: 100ms
+          min_brightness: 50%
+          max_brightness: 100%
 
 switch:
   - platform: template
@@ -210,37 +242,97 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     on_turn_on:
-      - lambda: id(va).set_use_wake_word(true);
       - if:
           condition:
-            not:
-              - voice_assistant.is_running
-          then:
-            - voice_assistant.start_continuous
-      - script.execute: reset_led
+            lambda: return !id(init_in_progress);
+          then:      
+            - lambda: id(va).set_use_wake_word(true);
+            - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+            - if:
+                condition:
+                  not:
+                    - voice_assistant.is_running
+                then:
+                  - voice_assistant.start_continuous
+            - script.execute: control_led
     on_turn_off:
-      - voice_assistant.stop
-      - lambda: id(va).set_use_wake_word(false);
-      - script.execute: reset_led
+      - if:
+          condition:
+            lambda: return !id(init_in_progress);
+          then:      
+            - voice_assistant.stop
+            - lambda: id(va).set_use_wake_word(false);
+            - lambda: id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+            - script.execute: control_led
 
 script:
-  - id: reset_led
+  - id: control_led
     then:
       - if:
           condition:
-            switch.is_on: use_wake_word
+            lambda: return !id(init_in_progress);
           then:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - if:
+                      condition:
+                        api.connected:
+                      then:
+                        - lambda: |
+                            switch(id(voice_assistant_phase)) {
+                              case ${voice_assist_listening_phase_id}:
+                                id(led).turn_on().set_rgb(0, 0, 1).set_effect("Slow Pulse").perform();
+                                break;
+                              case ${voice_assist_thinking_phase_id}:
+                                id(led).turn_on().set_rgb(0, 0, 1).set_effect("Fast Pulse").perform();
+                                break;
+                              case ${voice_assist_replying_phase_id}:
+                                id(led).turn_on().set_rgb(0, 0, 1).set_brightness(1.0).set_effect("none").perform();
+                                break;
+                              case ${voice_assist_error_phase_id}:
+                                id(led).turn_off().perform();
+                                break;
+                              case ${voice_assist_muted_phase_id}:
+                                id(led).turn_off().perform();
+                                break;
+                              case ${voice_assist_not_ready_phase_id}:
+                                id(led).turn_off().perform();
+                                break;
+                              default:
+                                id(led).turn_on().set_rgb(1, 1, 1).set_brightness(0.2).set_effect("none").perform();
+                                break;
+                            }
+                      else:
+                        - light.turn_off:
+                            id: led
+                else:
+                  - light.turn_off:
+                      id: led
+          else:
             - light.turn_on:
                 id: led
-                blue: 100%
-                red: 100%
-                green: 0%
-                brightness: 20%
-                transition_length: 250ms
-          else:
-            - light.turn_off:
-                id: led
-                transition_length: 250ms
+                blue: 0%
+                red: 0%
+                green: 100%
+                effect: "Fast Pulse"
+
+globals:
+  - id: init_in_progress
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: voice_assistant_phase
+    type: int
+    restore_value: no
+    initial_value: ${voice_assist_not_ready_phase_id}
+
+button:
+  - platform: restart
+    name: "Restart"
+    disabled_by_default: true
+    entity_category: diagnostic
 
 external_components:
   - source: github://pr#5230
