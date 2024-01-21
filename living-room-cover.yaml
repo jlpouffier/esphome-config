@@ -15,6 +15,7 @@ api:
   encryption:
     key: !secret living-room-cover-api-encryption-key
 
+
 ota:
 
 
@@ -22,12 +23,6 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
 
-  # Enable fallback hotspot (captive portal) in case wifi connection fails
-  ap:
-    ssid: !secret living_room_cover_hotspot_ssid
-    password: !secret living_room_cover_hotspot_password
-
-captive_portal:
 
 switch:
   - platform: gpio
